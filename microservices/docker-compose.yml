@@ -1,0 +1,194 @@
+version: '3.8'
+
+services:
+  # API Gateway
+  api-gateway:
+    build: ./api-gateway
+    ports:
+      - "3001:3001"
+    environment:
+      - USER_SERVICE_URL=http://user-service:3002
+      - TRANSACTION_SERVICE_URL=http://transaction-service:3003
+      - BUDGET_SERVICE_URL=http://budget-service:3004
+      - CATEGORY_SERVICE_URL=http://category-service:3005
+      - CURRENCY_SERVICE_URL=http://currency-service:3006
+      - AI_SERVICE_URL=http://ai-service:3007
+      - REPORTS_SERVICE_URL=http://reports-service:3008
+      - FRONTEND_URL=http://localhost:3000
+    depends_on:
+      - user-service
+      - transaction-service
+      - budget-service
+      - category-service
+      - currency-service
+      - ai-service
+      - reports-service
+    networks:
+      - microservices-network
+
+  # User Service
+  user-service:
+    build: ./user-service
+    ports:
+      - "3002:3002"
+    environment:
+      - MONGODB_URI=mongodb://mongo:27017/finance_users
+      - JWT_SECRET=your-jwt-secret-key
+      - NODE_ENV=development
+    depends_on:
+      - mongo
+    networks:
+      - microservices-network
+
+  # Transaction Service
+  transaction-service:
+    build: ./transaction-service
+    ports:
+      - "3003:3003"
+    environment:
+      - MONGODB_URI=mongodb://mongo:27017/finance_transactions
+      - USER_SERVICE_URL=http://user-service:3002
+      - CURRENCY_SERVICE_URL=http://currency-service:3006
+      - NODE_ENV=development
+    depends_on:
+      - mongo
+      - user-service
+      - currency-service
+    networks:
+      - microservices-network
+
+  # Budget Service
+  budget-service:
+    build: ./budget-service
+    ports:
+      - "3004:3004"
+    environment:
+      - MONGODB_URI=mongodb://mongo:27017/finance_budgets
+      - USER_SERVICE_URL=http://user-service:3002
+      - TRANSACTION_SERVICE_URL=http://transaction-service:3003
+      - NODE_ENV=development
+    depends_on:
+      - mongo
+      - user-service
+      - transaction-service
+    networks:
+      - microservices-network
+
+  # Category Service
+  category-service:
+    build: ./category-service
+    ports:
+      - "3005:3005"
+    environment:
+      - MONGODB_URI=mongodb://mongo:27017/finance_categories
+      - USER_SERVICE_URL=http://user-service:3002
+      - NODE_ENV=development
+    depends_on:
+      - mongo
+      - user-service
+    networks:
+      - microservices-network
+
+  # Currency Service
+  currency-service:
+    build: ./currency-service
+    ports:
+      - "3006:3006"
+    environment:
+      - EXCHANGE_RATE_API_KEY=your-api-key
+      - REDIS_URL=redis://redis:6379
+      - NODE_ENV=development
+    depends_on:
+      - redis
+    networks:
+      - microservices-network
+
+  # AI Service
+  ai-service:
+    build: ./ai-service
+    ports:
+      - "3007:3007"
+    environment:
+      - AZURE_OPENAI_API_KEY=your-azure-openai-key
+      - AZURE_OPENAI_ENDPOINT=your-azure-endpoint
+      - TRANSACTION_SERVICE_URL=http://transaction-service:3003
+      - BUDGET_SERVICE_URL=http://budget-service:3004
+      - NODE_ENV=development
+    depends_on:
+      - transaction-service
+      - budget-service
+    networks:
+      - microservices-network
+
+  # Reports Service
+  reports-service:
+    build: ./reports-service
+    ports:
+      - "3008:3008"
+    environment:
+      - TRANSACTION_SERVICE_URL=http://transaction-service:3003
+      - BUDGET_SERVICE_URL=http://budget-service:3004
+      - CATEGORY_SERVICE_URL=http://category-service:3005
+      - NODE_ENV=development
+    depends_on:
+      - transaction-service
+      - budget-service
+      - category-service
+    networks:
+      - microservices-network
+
+  # Frontend (React App)
+  frontend:
+    build: ../frontend
+    ports:
+      - "3000:3000"
+    environment:
+      - REACT_APP_API_URL=http://localhost:3001/api
+    depends_on:
+      - api-gateway
+    networks:
+      - microservices-network
+
+  # MongoDB
+  mongo:
+    image: mongo:6.0
+    ports:
+      - "27017:27017"
+    volumes:
+      - mongo-data:/data/db
+    environment:
+      - MONGO_INITDB_ROOT_USERNAME=admin
+      - MONGO_INITDB_ROOT_PASSWORD=password
+    networks:
+      - microservices-network
+
+  # Redis (for caching and message queuing)
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis-data:/data
+    networks:
+      - microservices-network
+
+  # Nginx (Load Balancer - Optional)
+  nginx:
+    image: nginx:alpine
+    ports:
+      - "80:80"
+    volumes:
+      - ./nginx/nginx.conf:/etc/nginx/nginx.conf
+    depends_on:
+      - frontend
+      - api-gateway
+    networks:
+      - microservices-network
+
+volumes:
+  mongo-data:
+  redis-data:
+
+networks:
+  microservices-network:
+    driver: bridge
