@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { motion } from 'framer-motion';
 import {
   ChartBarIcon,
@@ -9,8 +10,9 @@ import {
   ArrowTrendingDownIcon,
   ArrowRightIcon,
   SwitchHorizontalIcon,
-  DatabaseIcon,
+  ServerStackIcon,
   AcademicCapIcon,
+  CurrencyDollarIcon,
 } from '@heroicons/react/24/outline';
 import { Line, Pie, Bar } from 'react-chartjs-2';
 import {
@@ -26,7 +28,7 @@ import {
   BarElement,
 } from 'chart.js';
 import axios from 'axios';
-import { formatCurrency } from '../../utils/currencies';
+import { formatCurrency, getCurrencySymbol, WORLD_CURRENCIES } from '../../utils/currencies';
 
 ChartJS.register(
   CategoryScale,
@@ -41,33 +43,143 @@ ChartJS.register(
 );
 
 const Dashboard = () => {
-  const [dataMode, setDataMode] = useState('demo'); // 'demo' or 'user'
-  const [loading, setLoading] = useState(false);
-  const [userTransactions, setUserTransactions] = useState([]);
-  const [userStats, setUserStats] = useState(null);
+  const navigate = useNavigate();
+  const [loading, setLoading] = useState(true);
+  const [transactions, setTransactions] = useState([]);
+  const [displayCurrency, setDisplayCurrency] = useState('USD'); // Currency for display
+  const [exchangeRates, setExchangeRates] = useState({});
+  const [stats, setStats] = useState({
+    totalBalance: 0,
+    totalIncome: 0,
+    totalExpenses: 0,
+    savingsRate: 0
+  });
+  const [chartData, setChartData] = useState({
+    monthlyTrends: [],
+    categoryBreakdown: []
+  });
 
-  // Demo data
-  const demoStats = {
-    totalBalance: 25430.50,
-    totalIncome: 5200.00,
-    totalExpenses: 3250.75,
-    savingsRate: 37.5
+  // Load display currency from localStorage on component mount
+  useEffect(() => {
+    const savedDisplayCurrency = localStorage.getItem('dashboardDisplayCurrency');
+    if (savedDisplayCurrency) {
+      setDisplayCurrency(savedDisplayCurrency);
+    }
+  }, []);
+
+  // Save display currency to localStorage when it changes
+  useEffect(() => {
+    if (displayCurrency) {
+      localStorage.setItem('dashboardDisplayCurrency', displayCurrency);
+    }
+  }, [displayCurrency]);
+
+  // Fetch exchange rates
+  useEffect(() => {
+    fetchExchangeRates();
+  }, []);
+
+  const fetchExchangeRates = async () => {
+    try {
+      const response = await axios.get('/api/currency/rates');
+      if (response.data.success) {
+        setExchangeRates(response.data.data.rates);
+      }
+    } catch (error) {
+      console.error('Failed to fetch exchange rates:', error);
+    }
   };
 
-  const demoTransactions = [
-    { id: 1, description: 'Salary Deposit', amount: 5200.00, category: 'Income', date: '2024-01-15', type: 'income' },
-    { id: 2, description: 'Grocery Shopping', amount: -125.50, category: 'Food', date: '2024-01-14', type: 'expense' },
-    { id: 3, description: 'Electric Bill', amount: -89.75, category: 'Utilities', date: '2024-01-13', type: 'expense' },
-    { id: 4, description: 'Coffee Shop', amount: -4.50, category: 'Food', date: '2024-01-12', type: 'expense' },
-    { id: 5, description: 'Gas Station', amount: -45.00, category: 'Transportation', date: '2024-01-11', type: 'expense' },
-  ];
-
-  // Load user data from backend
-  useEffect(() => {
-    if (dataMode === 'user') {
-      loadUserData();
+  // Convert amount to display currency
+  const convertToDisplayCurrency = (amount, fromCurrency) => {
+    if (!amount || fromCurrency === displayCurrency) return amount;
+    
+    if (exchangeRates[fromCurrency] && exchangeRates[displayCurrency]) {
+      // Convert from original currency to USD, then to display currency
+      const usdAmount = amount / exchangeRates[fromCurrency];
+      return usdAmount * exchangeRates[displayCurrency];
     }
-  }, [dataMode]);
+    
+    return amount; // Fallback to original amount if rates not available
+  };
+
+  // Load user data from backend on component mount
+  useEffect(() => {
+    loadUserData();
+  }, []);
+
+  // Recalculate stats when display currency or exchange rates change
+  useEffect(() => {
+    if (transactions.length > 0 && Object.keys(exchangeRates).length > 0) {
+      calculateStatsInDisplayCurrency();
+    }
+  }, [displayCurrency, exchangeRates, transactions]);
+
+  const calculateStatsInDisplayCurrency = () => {
+    const currentMonth = new Date().getMonth();
+    const currentYear = new Date().getFullYear();
+    
+    // Filter transactions for current month
+    const currentMonthTransactions = transactions.filter(t => {
+      const transactionDate = new Date(t.date);
+      return transactionDate.getMonth() === currentMonth && 
+             transactionDate.getFullYear() === currentYear;
+    });
+    
+    const income = currentMonthTransactions
+      .filter(t => t.type === 'income')
+      .reduce((sum, t) => {
+        const amount = Math.abs(t.originalAmount || t.amount || 0);
+        const currency = t.originalCurrency || t.currency || 'USD';
+        const convertedAmount = convertToDisplayCurrency(amount, currency);
+        return sum + convertedAmount;
+      }, 0);
+    
+    const expenses = currentMonthTransactions
+      .filter(t => t.type === 'expense')
+      .reduce((sum, t) => {
+        const amount = Math.abs(t.originalAmount || t.amount || 0);
+        const currency = t.originalCurrency || t.currency || 'USD';
+        const convertedAmount = convertToDisplayCurrency(amount, currency);
+        return sum + convertedAmount;
+      }, 0);
+    
+    // Calculate overall balance from all transactions
+    const totalBalance = transactions.reduce((sum, t) => {
+      const amount = Math.abs(t.originalAmount || t.amount || 0);
+      const currency = t.originalCurrency || t.currency || 'USD';
+      const convertedAmount = convertToDisplayCurrency(amount, currency);
+      return t.type === 'income' ? sum + convertedAmount : sum - convertedAmount;
+    }, 0);
+    
+    setStats({
+      totalIncome: income,
+      totalExpenses: expenses,
+      totalBalance: totalBalance,
+      savingsRate: income > 0 ? ((income - expenses) / income * 100).toFixed(2) : 0
+    });
+  };
+
+  // Reload data when component becomes visible (user navigates back)
+  useEffect(() => {
+    const handleVisibilityChange = () => {
+      if (!document.hidden) {
+        loadUserData();
+      }
+    };
+
+    const handleFocus = () => {
+      loadUserData();
+    };
+
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+    window.addEventListener('focus', handleFocus);
+
+    return () => {
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
+      window.removeEventListener('focus', handleFocus);
+    };
+  }, []);
 
   const loadUserData = async () => {
     try {
@@ -76,41 +188,63 @@ const Dashboard = () => {
       // Load transactions
       const transactionsResponse = await axios.get('/api/transactions?limit=10');
       if (transactionsResponse.data.success) {
-        setUserTransactions(transactionsResponse.data.data.transactions);
+        setTransactions(transactionsResponse.data.data.transactions);
       }
 
       // Load summary stats
       const summaryResponse = await axios.get('/api/transactions/summary/month');
       if (summaryResponse.data.success) {
-        setUserStats(summaryResponse.data.data.summary);
+        const backendStats = summaryResponse.data.data.summary;
+        const { categoryBreakdown = [], monthlyTrends = [] } = summaryResponse.data.data;
+        
+        // Map backend response to frontend state
+        setStats({
+          totalIncome: backendStats.income || 0,
+          totalExpenses: backendStats.expenses || 0,
+          totalBalance: backendStats.netAmount || 0,
+          savingsRate: parseFloat(backendStats.savingsRate) || 0
+        });
+
+        // Set chart data from backend
+        setChartData({
+          monthlyTrends,
+          categoryBreakdown
+        });
       }
     } catch (error) {
       console.error('Failed to load user data:', error);
-      // Fallback to localStorage data
+      // Fallback to localStorage data for accurate balance calculation
       const savedTransactions = localStorage.getItem('customTransactions');
       if (savedTransactions) {
-        const parsed = JSON.parse(savedTransactions);
-        setUserTransactions(parsed.slice(0, 10));
-        
-        // Calculate basic stats from localStorage
-        const income = parsed.filter(t => t.type === 'income').reduce((sum, t) => sum + Math.abs(t.amount), 0);
-        const expenses = parsed.filter(t => t.type === 'expense').reduce((sum, t) => sum + Math.abs(t.amount), 0);
-        
-        setUserStats({
-          income,
-          expenses,
-          netAmount: income - expenses,
-          savingsRate: income > 0 ? ((income - expenses) / income * 100).toFixed(2) : 0
+        try {
+          const parsed = JSON.parse(savedTransactions);
+          setTransactions(parsed.slice(0, 10));
+          
+          // The stats will be calculated by the useEffect when transactions change
+          // This ensures currency conversion is applied consistently
+        } catch (parseError) {
+          console.error('Failed to parse localStorage data:', parseError);
+          // Set empty stats if parsing fails
+          setStats({
+            totalIncome: 0,
+            totalExpenses: 0,
+            totalBalance: 0,
+            savingsRate: 0
+          });
+        }
+      } else {
+        // No localStorage data, set empty stats
+        setStats({
+          totalIncome: 0,
+          totalExpenses: 0,
+          totalBalance: 0,
+          savingsRate: 0
         });
       }
     } finally {
       setLoading(false);
     }
   };
-
-  // Use demo or user data based on mode
-  const stats = dataMode === 'demo' ? demoStats : userStats || demoStats;
-  const transactions = dataMode === 'demo' ? demoTransactions : userTransactions;
 
   // Chart data
   const monthlySpendingData = {
@@ -210,43 +344,76 @@ const Dashboard = () => {
             Welcome back! Here's your financial overview.
           </p>
         </div>
-        <motion.button
-          whileHover={{ scale: 1.05 }}
-          whileTap={{ scale: 0.95 }}
-          className="bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-lg flex items-center space-x-2 transition-colors duration-200"
-        >
-          <PlusIcon className="h-5 w-5" />
-          <span>Add Transaction</span>
-        </motion.button>
-      </div>
-
-      {/* Data Mode Toggle */}
-      <div className="flex justify-center mb-6">
-        <div className="bg-gray-100 dark:bg-gray-800 p-1 rounded-lg">
-          <button
-            onClick={() => setDataMode('demo')}
-            className={`px-4 py-2 rounded-md text-sm font-medium transition-colors duration-200 ${
-              dataMode === 'demo'
-                ? 'bg-blue-600 text-white shadow-sm'
-                : 'text-gray-600 dark:text-gray-400 hover:text-gray-900 dark:hover:text-gray-200'
-            }`}
+        <div className="flex items-center space-x-3">
+          <motion.button
+            whileHover={{ scale: 1.05 }}
+            whileTap={{ scale: 0.95 }}
+            onClick={loadUserData}
+            disabled={loading}
+            className="bg-gray-100 hover:bg-gray-200 dark:bg-gray-700 dark:hover:bg-gray-600 text-gray-700 dark:text-gray-300 px-3 py-2 rounded-lg flex items-center space-x-2 transition-colors duration-200 disabled:opacity-50"
           >
-            Demo Data
-          </button>
-          <button
-            onClick={() => setDataMode('user')}
-            className={`px-4 py-2 rounded-md text-sm font-medium transition-colors duration-200 ${
-              dataMode === 'user'
-                ? 'bg-blue-600 text-white shadow-sm'
-                : 'text-gray-600 dark:text-gray-400 hover:text-gray-900 dark:hover:text-gray-200'
-            }`}
+            <ServerStackIcon className={`h-5 w-5 ${loading ? 'animate-spin' : ''}`} />
+            <span>Refresh</span>
+          </motion.button>
+          <motion.button
+            whileHover={{ scale: 1.05 }}
+            whileTap={{ scale: 0.95 }}
+            onClick={() => navigate('/custom-transactions')}
+            className="bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-lg flex items-center space-x-2 transition-colors duration-200"
           >
-            Your Data
-          </button>
+            <PlusIcon className="h-5 w-5" />
+            <span>Add Transaction</span>
+          </motion.button>
         </div>
       </div>
 
+      {/* Currency Display Selector */}
+      <div>
+        <motion.div
+          initial={{ opacity: 0, y: 20 }}
+          animate={{ opacity: 1, y: 0 }}
+          className="bg-white dark:bg-gray-800 rounded-lg shadow p-4"
+        >
+          <div className="flex items-center justify-between flex-wrap gap-4">
+            <div className="flex items-center">
+              <CurrencyDollarIcon className="h-5 w-5 text-blue-600 dark:text-blue-400 mr-2" />
+              <span className="text-sm font-medium text-gray-700 dark:text-gray-300">
+                Display Currency:
+              </span>
+            </div>
+            <div className="flex items-center gap-2">
+              <select
+                value={displayCurrency}
+                onChange={(e) => setDisplayCurrency(e.target.value)}
+                className="block w-48 px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-md shadow-sm focus:outline-none focus:ring-blue-500 focus:border-blue-500 dark:bg-gray-700 dark:text-white text-sm"
+              >
+                {WORLD_CURRENCIES.map((currency) => (
+                  <option key={currency.code} value={currency.code}>
+                    {currency.code} - {currency.name}
+                  </option>
+                ))}
+              </select>
+              <span className="text-sm font-semibold text-blue-600 dark:text-blue-400 bg-blue-50 dark:bg-blue-900 px-2 py-1 rounded">
+                {getCurrencySymbol(displayCurrency)} {displayCurrency}
+              </span>
+            </div>
+          </div>
+          <p className="mt-2 text-xs text-gray-500 dark:text-gray-400">
+            All amounts will be displayed in <strong>{displayCurrency}</strong>. This affects totals, income, expenses, and balance calculations.
+          </p>
+        </motion.div>
+      </div>
+
+      {/* Loading State */}
+      {loading && (
+        <div className="flex justify-center items-center py-12">
+          <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-600"></div>
+          <span className="ml-2 text-gray-600 dark:text-gray-400">Loading your data...</span>
+        </div>
+      )}
+
       {/* Stats Grid */}
+      {!loading && (
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
         <motion.div
           initial={{ opacity: 0, y: 20 }}
@@ -258,7 +425,10 @@ const Dashboard = () => {
             <div>
               <p className="text-sm text-gray-600 dark:text-gray-400">Total Balance</p>
               <p className="text-2xl font-bold text-gray-900 dark:text-white">
-                ${stats.totalBalance.toLocaleString()}
+                {getCurrencySymbol(displayCurrency)}{(stats.totalBalance || 0).toLocaleString(undefined, {
+                  minimumFractionDigits: 2,
+                  maximumFractionDigits: 2
+                })} {displayCurrency}
               </p>
             </div>
             <div className="h-12 w-12 bg-blue-100 dark:bg-blue-900 rounded-lg flex items-center justify-center">
@@ -282,7 +452,10 @@ const Dashboard = () => {
             <div>
               <p className="text-sm text-gray-600 dark:text-gray-400">Monthly Income</p>
               <p className="text-2xl font-bold text-green-600 dark:text-green-400">
-                ${stats.totalIncome.toLocaleString()}
+                {getCurrencySymbol(displayCurrency)}{(stats.totalIncome || 0).toLocaleString(undefined, {
+                  minimumFractionDigits: 2,
+                  maximumFractionDigits: 2
+                })} {displayCurrency}
               </p>
             </div>
             <div className="h-12 w-12 bg-green-100 dark:bg-green-900 rounded-lg flex items-center justify-center">
@@ -306,7 +479,10 @@ const Dashboard = () => {
             <div>
               <p className="text-sm text-gray-600 dark:text-gray-400">Monthly Expenses</p>
               <p className="text-2xl font-bold text-red-600 dark:text-red-400">
-                ${stats.totalExpenses.toLocaleString()}
+                {getCurrencySymbol(displayCurrency)}{(stats.totalExpenses || 0).toLocaleString(undefined, {
+                  minimumFractionDigits: 2,
+                  maximumFractionDigits: 2
+                })} {displayCurrency}
               </p>
             </div>
             <div className="h-12 w-12 bg-red-100 dark:bg-red-900 rounded-lg flex items-center justify-center">
@@ -344,8 +520,10 @@ const Dashboard = () => {
           </div>
         </motion.div>
       </div>
+      )}
 
       {/* Charts Grid */}
+      {!loading && (
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
         {/* Monthly Trends */}
         <motion.div
@@ -377,8 +555,10 @@ const Dashboard = () => {
           </div>
         </motion.div>
       </div>
+      )}
 
       {/* Budget Overview and Recent Transactions */}
+      {!loading && (
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
         {/* Budget Progress */}
         <motion.div
@@ -411,13 +591,16 @@ const Dashboard = () => {
             <h3 className="text-lg font-semibold text-gray-900 dark:text-white">
               Recent Transactions
             </h3>
-            <button className="text-blue-600 hover:text-blue-700 dark:text-blue-400 dark:hover:text-blue-300 text-sm font-medium flex items-center">
+            <button 
+              onClick={() => navigate('/custom-transactions')}
+              className="text-blue-600 hover:text-blue-700 dark:text-blue-400 dark:hover:text-blue-300 text-sm font-medium flex items-center"
+            >
               View All
               <ArrowRightIcon className="h-4 w-4 ml-1" />
             </button>
           </div>
           <div className="space-y-3">
-            {recentTransactions.map((transaction, index) => (
+            {transactions.slice(0, 5).map((transaction, index) => (
               <motion.div
                 key={transaction.id}
                 initial={{ opacity: 0, x: -20 }}
@@ -442,7 +625,10 @@ const Dashboard = () => {
                       {transaction.description}
                     </p>
                     <p className="text-sm text-gray-500 dark:text-gray-400">
-                      {transaction.category} • {transaction.date}
+                      {transaction.category} • {new Date(transaction.date).toLocaleDateString('en-US', {
+                        month: 'short',
+                        day: 'numeric'
+                      })}
                     </p>
                   </div>
                 </div>
@@ -451,15 +637,26 @@ const Dashboard = () => {
                     ? 'text-green-600 dark:text-green-400' 
                     : 'text-red-600 dark:text-red-400'
                 }`}>
-                  {transaction.type === 'income' ? '+' : ''}${Math.abs(transaction.amount).toFixed(2)}
+                  {transaction.type === 'income' ? '+' : '-'}
+                  {getCurrencySymbol(displayCurrency)}{(() => {
+                    const amount = Math.abs(transaction.originalAmount || transaction.amount || 0);
+                    const currency = transaction.originalCurrency || transaction.currency || 'USD';
+                    const convertedAmount = convertToDisplayCurrency(amount, currency);
+                    return convertedAmount.toLocaleString(undefined, {
+                      minimumFractionDigits: 2,
+                      maximumFractionDigits: 2
+                    });
+                  })()} {displayCurrency}
                 </span>
               </motion.div>
             ))}
           </div>
         </motion.div>
       </div>
+      )}
 
       {/* Quick Actions */}
+      {!loading && (
       <motion.div
         initial={{ opacity: 0, y: 20 }}
         animate={{ opacity: 1, y: 0 }}
@@ -470,24 +667,37 @@ const Dashboard = () => {
           Quick Actions
         </h3>
         <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-          <button className="p-4 text-center hover:bg-gray-50 dark:hover:bg-gray-700 rounded-lg transition-colors duration-200">
+          <button 
+            onClick={() => navigate('/custom-transactions')}
+            className="p-4 text-center hover:bg-gray-50 dark:hover:bg-gray-700 rounded-lg transition-colors duration-200"
+          >
             <PlusIcon className="h-8 w-8 text-blue-600 dark:text-blue-400 mx-auto mb-2" />
             <span className="text-sm font-medium text-gray-900 dark:text-white">Add Transaction</span>
           </button>
-          <button className="p-4 text-center hover:bg-gray-50 dark:hover:bg-gray-700 rounded-lg transition-colors duration-200">
+          <button 
+            onClick={() => navigate('/reports')}
+            className="p-4 text-center hover:bg-gray-50 dark:hover:bg-gray-700 rounded-lg transition-colors duration-200"
+          >
             <ChartBarIcon className="h-8 w-8 text-green-600 dark:text-green-400 mx-auto mb-2" />
             <span className="text-sm font-medium text-gray-900 dark:text-white">View Reports</span>
           </button>
-          <button className="p-4 text-center hover:bg-gray-50 dark:hover:bg-gray-700 rounded-lg transition-colors duration-200">
+          <button 
+            onClick={() => navigate('/budgets')}
+            className="p-4 text-center hover:bg-gray-50 dark:hover:bg-gray-700 rounded-lg transition-colors duration-200"
+          >
             <CalendarIcon className="h-8 w-8 text-purple-600 dark:text-purple-400 mx-auto mb-2" />
             <span className="text-sm font-medium text-gray-900 dark:text-white">Manage Budgets</span>
           </button>
-          <button className="p-4 text-center hover:bg-gray-50 dark:hover:bg-gray-700 rounded-lg transition-colors duration-200">
+          <button 
+            onClick={() => navigate('/ai-insights')}
+            className="p-4 text-center hover:bg-gray-50 dark:hover:bg-gray-700 rounded-lg transition-colors duration-200"
+          >
             <CreditCardIcon className="h-8 w-8 text-orange-600 dark:text-orange-400 mx-auto mb-2" />
             <span className="text-sm font-medium text-gray-900 dark:text-white">AI Insights</span>
           </button>
         </div>
       </motion.div>
+      )}
     </div>
   );
 };

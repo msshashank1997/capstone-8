@@ -12,7 +12,7 @@ const transactionRoutes = require('./routes/transactions');
 const budgetRoutes = require('./routes/budgets');
 const categoryRoutes = require('./routes/categories');
 const currencyRoutes = require('./routes/currency');
-// const aiRoutes = require('./routes/ai'); // Temporarily disabled
+const aiRoutes = require('./routes/ai');
 const reportRoutes = require('./routes/reports');
 
 // Import middleware
@@ -75,7 +75,7 @@ app.use('/api/transactions', transactionRoutes);
 app.use('/api/budgets', budgetRoutes);
 app.use('/api/categories', categoryRoutes);
 app.use('/api/currency', currencyRoutes);
-// app.use('/api/ai', aiRoutes); // Temporarily disabled
+app.use('/api/ai', aiRoutes);
 app.use('/api/reports', reportRoutes);
 
 // Root endpoint

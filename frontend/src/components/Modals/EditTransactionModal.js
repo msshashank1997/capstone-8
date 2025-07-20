@@ -3,6 +3,7 @@ import { motion } from 'framer-motion';
 import {
   XMarkIcon,
   PlusIcon,
+  PencilIcon,
   CalendarIcon,
   CreditCardIcon,
   TagIcon,
@@ -11,31 +12,34 @@ import {
 import { WORLD_CURRENCIES, POPULAR_CURRENCIES, formatCurrency } from '../../utils/currencies';
 import axios from 'axios';
 
-const AddTransactionModal = ({ isOpen, onClose, onAddTransaction, defaultCurrency = '' }) => {
+const EditTransactionModal = ({ isOpen, onClose, onUpdateTransaction, transaction, defaultCurrency = '' }) => {
   const [formData, setFormData] = useState({
     description: '',
     amount: '',
     category: '',
     type: 'expense',
     date: new Date().toISOString().split('T')[0],
-    currency: defaultCurrency,
+    currency: '',
   });
 
   const [showAllCurrencies, setShowAllCurrencies] = useState(false);
   const [exchangeRates, setExchangeRates] = useState({});
   const [convertedAmount, setConvertedAmount] = useState(null);
 
-  // Fetch exchange rates when modal opens
+  // Populate form with transaction data when modal opens
   useEffect(() => {
-    if (isOpen) {
+    if (isOpen && transaction) {
+      setFormData({
+        description: transaction.description || '',
+        amount: Math.abs(transaction.originalAmount || transaction.amount || 0).toString(),
+        category: transaction.category || '',
+        type: transaction.type || 'expense',
+        date: transaction.date ? transaction.date.split('T')[0] : new Date().toISOString().split('T')[0],
+        currency: transaction.originalCurrency || transaction.currency || '',
+      });
       fetchExchangeRates();
-      // Use defaultCurrency when modal opens
-      setFormData(prev => ({
-        ...prev,
-        currency: defaultCurrency
-      }));
     }
-  }, [isOpen, defaultCurrency]);
+  }, [isOpen, transaction]);
 
   // Convert amount when currency or amount changes
   useEffect(() => {
@@ -110,40 +114,26 @@ const AddTransactionModal = ({ isOpen, onClose, onAddTransaction, defaultCurrenc
       return;
     }
     
-    const transaction = {
-      id: Date.now(),
+    const updatedTransaction = {
+      ...transaction,
       description: formData.description,
       amount: formData.type === 'expense' ? -Math.abs(parseFloat(formData.amount)) : Math.abs(parseFloat(formData.amount)),
       category: formData.category,
       date: formData.date,
       type: formData.type,
       currency: formData.currency,
-      // Add exchange rate and original amount for database storage
       exchangeRate: exchangeRates[formData.currency] || 1,
       originalAmount: parseFloat(formData.amount),
       originalCurrency: formData.currency,
       convertedAmountUSD: convertedAmount || parseFloat(formData.amount),
     };
 
-    onAddTransaction(transaction);
-    
-    // Reset form completely
-    setFormData({
-      description: '',
-      amount: '',
-      category: '',
-      type: 'expense',
-      date: new Date().toISOString().split('T')[0],
-      currency: defaultCurrency, // Use defaultCurrency instead of empty
-    });
-    
-    setConvertedAmount(null);
+    onUpdateTransaction(updatedTransaction);
     onClose();
   };
 
   const handleInputChange = (e) => {
     const { name, value } = e.target;
-    
     setFormData(prev => ({
       ...prev,
       [name]: value
@@ -153,7 +143,7 @@ const AddTransactionModal = ({ isOpen, onClose, onAddTransaction, defaultCurrenc
   const currenciesToShow = showAllCurrencies ? WORLD_CURRENCIES : 
     WORLD_CURRENCIES.filter(currency => POPULAR_CURRENCIES.includes(currency.code));
 
-  if (!isOpen) return null;
+  if (!isOpen || !transaction) return null;
 
   return (
     <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
@@ -165,7 +155,7 @@ const AddTransactionModal = ({ isOpen, onClose, onAddTransaction, defaultCurrenc
       >
         <div className="flex items-center justify-between p-6 border-b border-gray-200 dark:border-gray-700">
           <h2 className="text-xl font-semibold text-gray-900 dark:text-white">
-            Add New Transaction
+            Edit Transaction
           </h2>
           <button
             onClick={onClose}
@@ -191,7 +181,8 @@ const AddTransactionModal = ({ isOpen, onClose, onAddTransaction, defaultCurrenc
                   onChange={handleInputChange}
                   className="mr-2"
                 />
-                <span className="text-red-600">Expense</span>
+                <CreditCardIcon className="h-5 w-5 text-red-500 mr-1" />
+                <span className="text-gray-700 dark:text-gray-300">Expense</span>
               </label>
               <label className="flex items-center">
                 <input
@@ -202,7 +193,8 @@ const AddTransactionModal = ({ isOpen, onClose, onAddTransaction, defaultCurrenc
                   onChange={handleInputChange}
                   className="mr-2"
                 />
-                <span className="text-green-600">Income</span>
+                <PlusIcon className="h-5 w-5 text-green-500 mr-1" />
+                <span className="text-gray-700 dark:text-gray-300">Income</span>
               </label>
             </div>
           </div>
@@ -210,7 +202,6 @@ const AddTransactionModal = ({ isOpen, onClose, onAddTransaction, defaultCurrenc
           {/* Description */}
           <div>
             <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
-              <CreditCardIcon className="h-4 w-4 inline mr-1" />
               Description
             </label>
             <input
@@ -219,8 +210,8 @@ const AddTransactionModal = ({ isOpen, onClose, onAddTransaction, defaultCurrenc
               value={formData.description}
               onChange={handleInputChange}
               placeholder="Enter transaction description"
+              className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-md shadow-sm focus:outline-none focus:ring-blue-500 focus:border-blue-500 dark:bg-gray-700 dark:text-white"
               required
-              className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 dark:bg-gray-700 dark:border-gray-600 dark:text-white"
             />
           </div>
 
@@ -228,21 +219,24 @@ const AddTransactionModal = ({ isOpen, onClose, onAddTransaction, defaultCurrenc
           <div className="grid grid-cols-2 gap-4">
             <div>
               <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
-                <CurrencyDollarIcon className="h-4 w-4 inline mr-1" />
                 Amount
               </label>
-              <input
-                type="number"
-                name="amount"
-                value={formData.amount}
-                onChange={handleInputChange}
-                placeholder="0.00"
-                step="0.01"
-                min="0"
-                required
-                className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 dark:bg-gray-700 dark:border-gray-600 dark:text-white"
-              />
+              <div className="relative">
+                <CurrencyDollarIcon className="h-5 w-5 text-gray-400 absolute left-3 top-1/2 transform -translate-y-1/2" />
+                <input
+                  type="number"
+                  name="amount"
+                  value={formData.amount}
+                  onChange={handleInputChange}
+                  placeholder="0.00"
+                  step="0.01"
+                  min="0.01"
+                  className="w-full pl-10 pr-3 py-2 border border-gray-300 dark:border-gray-600 rounded-md shadow-sm focus:outline-none focus:ring-blue-500 focus:border-blue-500 dark:bg-gray-700 dark:text-white"
+                  required
+                />
+              </div>
             </div>
+
             <div>
               <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
                 Currency
@@ -252,95 +246,96 @@ const AddTransactionModal = ({ isOpen, onClose, onAddTransaction, defaultCurrenc
                 value={formData.currency}
                 onChange={handleInputChange}
                 required
-                className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 dark:bg-gray-700 dark:border-gray-600 dark:text-white"
+                className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-md shadow-sm focus:outline-none focus:ring-blue-500 focus:border-blue-500 dark:bg-gray-700 dark:text-white"
               >
                 <option value="">Select a currency</option>
-                {currenciesToShow.map(currency => (
+                {currenciesToShow.map((currency) => (
                   <option key={currency.code} value={currency.code}>
-                    {currency.symbol} {currency.code} - {currency.name}
+                    {currency.code} - {currency.name}
                   </option>
                 ))}
               </select>
-              <button
-                type="button"
-                onClick={() => setShowAllCurrencies(!showAllCurrencies)}
-                className="text-xs text-blue-600 hover:text-blue-800 mt-1"
-              >
-                {showAllCurrencies ? 'Show Popular Only' : 'Show All Currencies'}
-              </button>
             </div>
           </div>
+
+          {/* Show all currencies toggle */}
+          <button
+            type="button"
+            onClick={() => setShowAllCurrencies(!showAllCurrencies)}
+            className="text-sm text-blue-600 hover:text-blue-800 dark:text-blue-400 dark:hover:text-blue-300"
+          >
+            {showAllCurrencies ? 'Show popular currencies only' : 'Show all currencies'}
+          </button>
+
+          {/* Currency Conversion Display */}
+          {convertedAmount && formData.currency !== 'USD' && (
+            <div className="p-3 bg-blue-50 dark:bg-blue-900 rounded-md">
+              <p className="text-sm text-blue-800 dark:text-blue-200">
+                {formatCurrency(parseFloat(formData.amount), formData.currency)} = {formatCurrency(convertedAmount, 'USD')}
+              </p>
+            </div>
+          )}
 
           {/* Category */}
           <div>
             <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
-              <TagIcon className="h-4 w-4 inline mr-1" />
               Category
             </label>
-            <select
-              name="category"
-              value={formData.category}
-              onChange={handleInputChange}
-              required
-              className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 dark:bg-gray-700 dark:border-gray-600 dark:text-white"
-            >
-              <option value="">Select a category</option>
-              {categories[formData.type].map(category => (
-                <option key={category} value={category}>
-                  {category}
-                </option>
-              ))}
-            </select>
+            <div className="relative">
+              <TagIcon className="h-5 w-5 text-gray-400 absolute left-3 top-1/2 transform -translate-y-1/2" />
+              <select
+                name="category"
+                value={formData.category}
+                onChange={handleInputChange}
+                className="w-full pl-10 pr-3 py-2 border border-gray-300 dark:border-gray-600 rounded-md shadow-sm focus:outline-none focus:ring-blue-500 focus:border-blue-500 dark:bg-gray-700 dark:text-white"
+                required
+              >
+                <option value="">Select a category</option>
+                {categories[formData.type].map((category) => (
+                  <option key={category} value={category}>
+                    {category}
+                  </option>
+                ))}
+              </select>
+            </div>
           </div>
 
           {/* Date */}
           <div>
             <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
-              <CalendarIcon className="h-4 w-4 inline mr-1" />
               Date
             </label>
-            <input
-              type="date"
-              name="date"
-              value={formData.date}
-              onChange={handleInputChange}
-              required
-              className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 dark:bg-gray-700 dark:border-gray-600 dark:text-white"
-            />
+            <div className="relative">
+              <CalendarIcon className="h-5 w-5 text-gray-400 absolute left-3 top-1/2 transform -translate-y-1/2" />
+              <input
+                type="date"
+                name="date"
+                value={formData.date}
+                onChange={handleInputChange}
+                className="w-full pl-10 pr-3 py-2 border border-gray-300 dark:border-gray-600 rounded-md shadow-sm focus:outline-none focus:ring-blue-500 focus:border-blue-500 dark:bg-gray-700 dark:text-white"
+                required
+              />
+            </div>
           </div>
 
-          {/* Preview */}
-          {formData.amount && formData.currency && (
-            <div className="bg-gray-50 dark:bg-gray-700 p-3 rounded-md space-y-2">
-              <p className="text-sm text-gray-600 dark:text-gray-300">Preview:</p>
-              <p className={`font-semibold ${formData.type === 'expense' ? 'text-red-600' : 'text-green-600'}`}>
-                {formData.type === 'expense' ? '-' : '+'}{formatCurrency(parseFloat(formData.amount) || 0, formData.currency)}
-              </p>
-              {convertedAmount && formData.currency !== 'USD' && (
-                <div className="text-sm text-gray-500 dark:text-gray-400">
-                  <p>≈ {formData.type === 'expense' ? '-' : '+'}${convertedAmount.toFixed(2)} USD</p>
-                  <p className="text-xs">Exchange rate: 1 {formData.currency} = ${(exchangeRates[formData.currency] || 1).toFixed(4)} USD</p>
-                </div>
-              )}
-            </div>
-          )}
-
           {/* Submit Button */}
-          <div className="flex space-x-3 pt-4">
+          <div className="flex justify-end space-x-3 pt-4">
             <button
               type="button"
               onClick={onClose}
-              className="flex-1 px-4 py-2 border border-gray-300 rounded-md text-gray-700 hover:bg-gray-50 dark:border-gray-600 dark:text-gray-300 dark:hover:bg-gray-700"
+              className="px-4 py-2 text-sm font-medium text-gray-700 dark:text-gray-300 bg-gray-100 dark:bg-gray-600 border border-gray-300 dark:border-gray-600 rounded-md hover:bg-gray-200 dark:hover:bg-gray-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500"
             >
               Cancel
             </button>
-            <button
+            <motion.button
+              whileHover={{ scale: 1.05 }}
+              whileTap={{ scale: 0.95 }}
               type="submit"
-              className="flex-1 px-4 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700 flex items-center justify-center"
+              className="px-4 py-2 text-sm font-medium text-white bg-blue-600 border border-transparent rounded-md hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500"
             >
-              <PlusIcon className="h-4 w-4 mr-1" />
-              Add Transaction
-            </button>
+              <PencilIcon className="h-4 w-4 inline mr-1" />
+              Update Transaction
+            </motion.button>
           </div>
         </form>
       </motion.div>
@@ -348,4 +343,4 @@ const AddTransactionModal = ({ isOpen, onClose, onAddTransaction, defaultCurrenc
   );
 };
 
-export default AddTransactionModal;
+export default EditTransactionModal;

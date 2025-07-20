@@ -10,24 +10,47 @@ import {
   ChevronUpIcon,
   CalendarIcon,
   CurrencyDollarIcon,
+  ChartBarIcon,
+  ScaleIcon,
 } from '@heroicons/react/24/outline';
 import AddTransactionModal from '../components/Modals/AddTransactionModal';
-import { formatCurrency, getCurrencySymbol } from '../utils/currencies';
+import EditTransactionModal from '../components/Modals/EditTransactionModal';
+import TransactionCharts from '../components/D3Visualizations/TransactionCharts';
+import { formatCurrency, getCurrencySymbol, WORLD_CURRENCIES } from '../utils/currencies';
 import axios from 'axios';
-import { toast } from 'react-hot-toast';
+import { toast } from 'react-toastify';
 
 const CustomTransactions = () => {
   const [transactions, setTransactions] = useState([]);
   const [filteredTransactions, setFilteredTransactions] = useState([]);
   const [isModalOpen, setIsModalOpen] = useState(false);
+  const [isEditModalOpen, setIsEditModalOpen] = useState(false);
+  const [editingTransaction, setEditingTransaction] = useState(null);
   const [searchTerm, setSearchTerm] = useState('');
   const [filterType, setFilterType] = useState('all');
   const [filterCategory, setFilterCategory] = useState('all');
   const [sortBy, setSortBy] = useState('date');
   const [sortOrder, setSortOrder] = useState('desc');
   const [selectedCurrency, setSelectedCurrency] = useState('all');
+  const [defaultCurrency, setDefaultCurrency] = useState(''); // Persistent currency for new transactions
+  const [showCharts, setShowCharts] = useState(false); // Toggle for showing D3 charts
   const [loading, setLoading] = useState(false);
   const [exchangeRates, setExchangeRates] = useState({});
+
+  // Load default currency from localStorage on component mount
+  useEffect(() => {
+    const savedDefaultCurrency = localStorage.getItem('defaultTransactionCurrency');
+    if (savedDefaultCurrency) {
+      setDefaultCurrency(savedDefaultCurrency);
+    }
+  }, []);
+
+  // Save default currency to localStorage when it changes
+  useEffect(() => {
+    if (defaultCurrency) {
+      localStorage.setItem('defaultTransactionCurrency', defaultCurrency);
+    }
+  }, [defaultCurrency]);
 
   // Load transactions from backend on component mount
   useEffect(() => {
@@ -63,8 +86,16 @@ const CustomTransactions = () => {
       const savedTransactions = localStorage.getItem('customTransactions');
       if (savedTransactions) {
         const parsed = JSON.parse(savedTransactions);
-        setTransactions(parsed);
-        setFilteredTransactions(parsed);
+        // Clean up and ensure all transactions have proper currency data
+        const cleanedTransactions = parsed.map(transaction => ({
+          ...transaction,
+          currency: transaction.currency || transaction.originalCurrency || 'USD',
+          originalCurrency: transaction.originalCurrency || transaction.currency || 'USD'
+        }));
+        setTransactions(cleanedTransactions);
+        setFilteredTransactions(cleanedTransactions);
+        // Update localStorage with cleaned data
+        localStorage.setItem('customTransactions', JSON.stringify(cleanedTransactions));
       }
     } finally {
       setLoading(false);
@@ -203,6 +234,55 @@ const CustomTransactions = () => {
     }
   };
 
+  const handleEditTransaction = (transaction) => {
+    setEditingTransaction(transaction);
+    setIsEditModalOpen(true);
+  };
+
+  const handleUpdateTransaction = async (updatedTransaction) => {
+    try {
+      setLoading(true);
+      
+      // Check if it's a backend transaction (has _id) or local transaction (has id)
+      const isBackendTransaction = updatedTransaction._id;
+      
+      if (isBackendTransaction) {
+        await axios.put(`/api/transactions/${updatedTransaction._id}`, {
+          amount: Math.abs(updatedTransaction.originalAmount || updatedTransaction.amount),
+          description: updatedTransaction.description,
+          category: updatedTransaction.category,
+          type: updatedTransaction.type,
+          date: updatedTransaction.date,
+          currency: updatedTransaction.originalCurrency || updatedTransaction.currency,
+          originalAmount: updatedTransaction.originalAmount,
+          originalCurrency: updatedTransaction.originalCurrency,
+          exchangeRate: updatedTransaction.exchangeRate,
+          paymentMethod: 'other'
+        });
+        await loadTransactions(); // Reload from backend
+        toast.success('Transaction updated successfully');
+      } else {
+        // Local transaction only
+        setTransactions(prev => prev.map(transaction => 
+          transaction.id === updatedTransaction.id ? updatedTransaction : transaction
+        ));
+        toast.success('Transaction updated in local storage');
+      }
+    } catch (error) {
+      console.error('Failed to update transaction:', error);
+      // Fallback to local update
+      setTransactions(prev => prev.map(transaction => 
+        (transaction.id === updatedTransaction.id || transaction._id === updatedTransaction._id) 
+          ? updatedTransaction : transaction
+      ));
+      toast.error('Failed to update in database, updated locally only');
+    } finally {
+      setLoading(false);
+      setIsEditModalOpen(false);
+      setEditingTransaction(null);
+    }
+  };
+
   const handleSort = (field) => {
     if (sortBy === field) {
       setSortOrder(sortOrder === 'asc' ? 'desc' : 'asc');
@@ -241,10 +321,17 @@ const CustomTransactions = () => {
       }, 0);
   };
 
+  const getAvailableBalance = () => {
+    const totalIncome = getTotalByType('income');
+    const totalExpenses = getTotalByType('expense');
+    return totalIncome - totalExpenses;
+  };
+
   const formatTransactionAmount = (transaction) => {
     const originalAmount = Math.abs(transaction.originalAmount || transaction.amount);
-    const originalCurrency = transaction.originalCurrency || transaction.currency;
+    const originalCurrency = transaction.originalCurrency || transaction.currency || 'USD';
     
+    // If showing all transactions or specific currency matches
     if (selectedCurrency === 'all' || selectedCurrency === originalCurrency) {
       return formatCurrency(originalAmount, originalCurrency);
     }
@@ -256,6 +343,7 @@ const CustomTransactions = () => {
       return formatCurrency(convertedAmount, selectedCurrency);
     }
     
+    // Fallback to original currency
     return formatCurrency(originalAmount, originalCurrency);
   };
 
@@ -279,8 +367,50 @@ const CustomTransactions = () => {
           </p>
         </div>
 
+        {/* Default Currency Selector */}
+        <div className="mb-6">
+          <motion.div
+            initial={{ opacity: 0, y: 20 }}
+            animate={{ opacity: 1, y: 0 }}
+            className="bg-white dark:bg-gray-800 rounded-lg shadow p-4"
+          >
+            <div className="flex items-center justify-between flex-wrap gap-4">
+              <div className="flex items-center">
+                <CurrencyDollarIcon className="h-5 w-5 text-blue-600 dark:text-blue-400 mr-2" />
+                <span className="text-sm font-medium text-gray-700 dark:text-gray-300">
+                  Default Currency for New Transactions:
+                </span>
+              </div>
+              <div className="flex items-center gap-2">
+                <select
+                  value={defaultCurrency}
+                  onChange={(e) => setDefaultCurrency(e.target.value)}
+                  className="block w-48 px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-md shadow-sm focus:outline-none focus:ring-blue-500 focus:border-blue-500 dark:bg-gray-700 dark:text-white text-sm"
+                >
+                  <option value="">Select Currency</option>
+                  {WORLD_CURRENCIES.map((currency) => (
+                    <option key={currency.code} value={currency.code}>
+                      {currency.code} - {currency.name}
+                    </option>
+                  ))}
+                </select>
+                {defaultCurrency && (
+                  <span className="text-sm font-semibold text-blue-600 dark:text-blue-400 bg-blue-50 dark:bg-blue-900 px-2 py-1 rounded">
+                    {getCurrencySymbol(defaultCurrency)} {defaultCurrency}
+                  </span>
+                )}
+              </div>
+            </div>
+            {defaultCurrency && (
+              <p className="mt-2 text-xs text-gray-500 dark:text-gray-400">
+                All new transactions will use <strong>{defaultCurrency}</strong> by default. You can change this currency for individual transactions if needed.
+              </p>
+            )}
+          </motion.div>
+        </div>
+
         {/* Summary Cards */}
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-6 mb-8">
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6 mb-8">
           <motion.div
             initial={{ opacity: 0, y: 20 }}
             animate={{ opacity: 1, y: 0 }}
@@ -327,8 +457,29 @@ const CustomTransactions = () => {
             className="bg-white dark:bg-gray-800 rounded-lg shadow p-6"
           >
             <div className="flex items-center">
-              <div className="p-2 bg-blue-100 dark:bg-blue-800 rounded-lg">
-                <CalendarIcon className="h-6 w-6 text-blue-600 dark:text-blue-400" />
+              <div className={`p-2 rounded-lg ${getAvailableBalance() >= 0 ? 'bg-blue-100 dark:bg-blue-800' : 'bg-orange-100 dark:bg-orange-800'}`}>
+                <ScaleIcon className={`h-6 w-6 ${getAvailableBalance() >= 0 ? 'text-blue-600 dark:text-blue-400' : 'text-orange-600 dark:text-orange-400'}`} />
+              </div>
+              <div className="ml-4">
+                <p className="text-sm font-medium text-gray-600 dark:text-gray-400">Available Balance</p>
+                <p className={`text-2xl font-semibold ${getAvailableBalance() >= 0 ? 'text-blue-600' : 'text-orange-600'}`}>
+                  {selectedCurrency === 'all' ? '$' : getCurrencySymbol(selectedCurrency)}{Math.abs(getAvailableBalance()).toFixed(2)}
+                  {selectedCurrency !== 'all' && ` ${selectedCurrency}`}
+                  {getAvailableBalance() < 0 && ' (Deficit)'}
+                </p>
+              </div>
+            </div>
+          </motion.div>
+
+          <motion.div
+            initial={{ opacity: 0, y: 20 }}
+            animate={{ opacity: 1, y: 0 }}
+            transition={{ delay: 0.3 }}
+            className="bg-white dark:bg-gray-800 rounded-lg shadow p-6"
+          >
+            <div className="flex items-center">
+              <div className="p-2 bg-purple-100 dark:bg-purple-800 rounded-lg">
+                <CalendarIcon className="h-6 w-6 text-purple-600 dark:text-purple-400" />
               </div>
               <div className="ml-4">
                 <p className="text-sm font-medium text-gray-600 dark:text-gray-400">Total Transactions</p>
@@ -399,10 +550,35 @@ const CustomTransactions = () => {
                   <PlusIcon className="h-4 w-4 mr-2" />
                   Add Transaction
                 </button>
+
+                <button
+                  onClick={() => setShowCharts(!showCharts)}
+                  className="px-4 py-2 bg-purple-600 text-white rounded-md hover:bg-purple-700 flex items-center"
+                >
+                  <ChartBarIcon className="h-4 w-4 mr-2" />
+                  {showCharts ? 'Hide Charts' : 'Show Charts'}
+                </button>
               </div>
             </div>
           </div>
         </div>
+
+        {/* D3.js Data Visualizations */}
+        {showCharts && (
+          <motion.div
+            initial={{ opacity: 0, height: 0 }}
+            animate={{ opacity: 1, height: 'auto' }}
+            exit={{ opacity: 0, height: 0 }}
+            transition={{ duration: 0.3 }}
+            className="mb-6"
+          >
+            <TransactionCharts 
+              transactions={filteredTransactions}
+              selectedCurrency={selectedCurrency}
+              exchangeRates={exchangeRates}
+            />
+          </motion.div>
+        )}
 
         {/* Transactions Table */}
         <div className="bg-white dark:bg-gray-800 rounded-lg shadow overflow-hidden">
@@ -487,19 +663,23 @@ const CustomTransactions = () => {
                         }`}>
                           {transaction.type === 'income' ? '+' : ''}
                           {formatTransactionAmount(transaction)}
-                          {transaction.originalCurrency && transaction.originalCurrency !== 'USD' && (
-                            <span className="text-xs text-gray-500 ml-1">
-                              (≈ ${Math.abs(transaction.amount || 0).toFixed(2)} USD)
-                            </span>
-                          )}
                         </span>
                       </td>
                       <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
                         <div className="flex items-center space-x-2">
                           <button
+                            onClick={() => handleEditTransaction(transaction)}
+                            disabled={loading}
+                            className="text-blue-600 hover:text-blue-800 dark:text-blue-400 dark:hover:text-blue-300 disabled:opacity-50"
+                            title="Edit transaction"
+                          >
+                            <PencilIcon className="h-4 w-4" />
+                          </button>
+                          <button
                             onClick={() => handleDeleteTransaction(transaction._id || transaction.id)}
                             disabled={loading}
                             className="text-red-600 hover:text-red-800 dark:text-red-400 dark:hover:text-red-300 disabled:opacity-50"
+                            title="Delete transaction"
                           >
                             <TrashIcon className="h-4 w-4" />
                           </button>
@@ -518,6 +698,19 @@ const CustomTransactions = () => {
           isOpen={isModalOpen}
           onClose={() => setIsModalOpen(false)}
           onAddTransaction={handleAddTransaction}
+          defaultCurrency={defaultCurrency}
+        />
+
+        {/* Edit Transaction Modal */}
+        <EditTransactionModal
+          isOpen={isEditModalOpen}
+          onClose={() => {
+            setIsEditModalOpen(false);
+            setEditingTransaction(null);
+          }}
+          onUpdateTransaction={handleUpdateTransaction}
+          transaction={editingTransaction}
+          defaultCurrency={defaultCurrency}
         />
       </div>
     </div>
